@@ -9,12 +9,12 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
    ============================================================ */
 
 const CHANNELS = [
-  { id: "big-table", name: "The Big Table", blurb: "General chatter. Pull up a chair.", emoji: "🍽️" },
-  { id: "wins", name: "Wins & Shoutouts", blurb: "Closed a policy? Passed an exam? Brag here.", emoji: "🏆" },
-  { id: "study-buddies", name: "The Stage", blurb: "Important notices, big news, and anything worth the spotlight.", emoji: "🎤" },
-  { id: "ask-a-veteran", name: "Ask a Veteran", blurb: "Questions for the folks who've been around.", emoji: "🧭" },
-  { id: "off-topic", name: "Off Topic", blurb: "Weekend plans, sports, pets, whatever.", emoji: "☕" },
-  { id: "wellness-commons", name: "The Commons", blurb: "Body, mind, and spirit — check-ins, wins, and whatever helps you feel human today.", emoji: "🌿" },
+  { id: "big-table", name: "The Big Table", blurb: "General chatter. Pull up a chair.", emoji: "🍽️", type: "chat" },
+  { id: "wins", name: "Wins & Shoutouts", blurb: "Closed a policy? Passed an exam? Post it and let people cheer you on.", emoji: "🏆", type: "forum" },
+  { id: "study-buddies", name: "The Stage", blurb: "Important notices, big news, and anything worth the spotlight.", emoji: "🎤", type: "forum" },
+  { id: "ask-a-veteran", name: "Ask a Veteran", blurb: "Post a question for the folks who've been around.", emoji: "🧭", type: "forum" },
+  { id: "off-topic", name: "Off Topic", blurb: "Weekend plans, sports, pets, whatever.", emoji: "☕", type: "forum" },
+  { id: "wellness-commons", name: "The Commons", blurb: "Body, mind, and spirit — check-ins, wins, and whatever helps you feel human today.", emoji: "🌿", type: "forum" },
 ];
 
 // Shown for The Commons only — a quiet reminder that this room is peer support, not professional care.
@@ -44,6 +44,16 @@ const normalizePhone = (raw) => {
 
 const ONLINE_WINDOW = 2 * 60 * 1000; // seen in the last 2 minutes = "here now"
 const RECENT_WINDOW = 24 * 60 * 60 * 1000;
+
+// Lightweight obfuscation so the manager password isn't stored in plain text.
+// This is convenience-level protection, not a real credential — same spirit as
+// everywhere else in the app, and unrelated to the real phone+PIN login system.
+const hashPin = (salt, pw) => {
+  let h = 5381;
+  const s = `tbr|${salt}|${pw}|v1`;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(16) + "-" + s.length.toString(16);
+};
 
 async function loadShared(key, fallback) {
   try {
@@ -333,7 +343,7 @@ function BrandMark({ size = 28 }) {
       <path d="M 68,88 A 12,12 0 0 0 68,112" stroke="#88aef1" strokeWidth="6" strokeLinecap="round" />
       <path d="M 68,76 A 24,24 0 0 0 68,124" stroke="#e2a84d" strokeWidth="6" strokeLinecap="round" />
       <path d="M 68,64 A 36,36 0 0 0 68,136" stroke="#74c690" strokeWidth="6" strokeLinecap="round" />
-      <path d="M 68,52 A 48,48 0 0 0 68,148" stroke="#e0718a" strokeWidth="6" strokeLinecap="round" />
+      <path d="M 68,56 A 44,44 0 0 0 68,144" stroke="#e0718a" strokeWidth="6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -347,39 +357,32 @@ export default function TheBreakRoom() {
 
   useEffect(() => {
     (async () => {
-      // Cross-app SSO: arriving with ?handoff=TOKEN from the shared sign-in
-      // logs the person straight in. The token is single-use — strip it so a
-      // refresh can't fail on a spent token.
+      // Arriving via a link from LogBook (or any app minting handoff tokens)?
+      // .../?handoff=TOKEN logs you straight in — no separate password step.
       const params = new URLSearchParams(window.location.search);
-      const token = params.get("handoff");
-      if (token) {
-        const student = await window.breakroomAuth.consumeHandoff(token);
+      const handoffToken = params.get("handoff");
+      if (handoffToken) {
+        // Clean the token out of the URL immediately either way — it's single-use
+        // and shouldn't linger in the address bar, browser history, or a reload.
         params.delete("handoff");
-        const rest = params.toString();
-        window.history.replaceState(null, "", window.location.pathname + (rest ? "?" + rest : ""));
-        if (student?.id) {
-          const p = { id: student.id, name: student.name, phone: student.phone, joined: Date.now() };
-          try { await window.storage.set("caf-session", JSON.stringify(p)); } catch (e) {}
-          setProfile(p);
-          setProfileLoaded(true);
-          return;
-        }
+        const clean = window.location.pathname + (params.toString() ? `?${params}` : "");
+        window.history.replaceState({}, "", clean);
+        try {
+          const result = await window.breakroomAuth.consumeHandoff(handoffToken);
+          if (result.status === "ok") {
+            const p = { id: result.student.id, name: result.student.name, phone: result.student.phone, joined: Date.now() };
+            setProfile(p);
+            try { await window.storage.set("caf-session", JSON.stringify(p)); } catch (e) {}
+            setProfileLoaded(true);
+            return;
+          }
+          // Invalid/expired token — fall through to the normal session check below.
+        } catch (e) {}
       }
       try {
         const r = await window.storage.get("caf-session");
-        if (r) {
-          setProfile(JSON.parse(r.value));
-          setProfileLoaded(true);
-          return;
-        }
+        if (r) setProfile(JSON.parse(r.value));
       } catch (e) {}
-      // Signed out and no token — go to the shared sign-in (which owns 2FA)
-      // unless ?local=1 forces Breakroom's own phone/PIN gate.
-      if (params.get("local") !== "1") {
-        const ret = encodeURIComponent(window.location.pathname + window.location.search);
-        window.location.href = `https://logbook-prosim.vercel.app/login?app=breakroom&return=${ret}`;
-        return;
-      }
       setProfileLoaded(true);
     })();
   }, []);
@@ -527,7 +530,7 @@ export default function TheBreakRoom() {
         <div className="caf-brand">
           <span className="caf-brand-mark"><BrandMark size={30} /></span>
           <div>
-            <div className="caf-brand-name">TheBreakRoom</div>
+            <div className="caf-brand-name"><span className="caf-brand-letter">T</span>he<span className="caf-brand-letter">B</span>reak<span className="caf-brand-letter">R</span>oom</div>
             <div className="caf-brand-sub">where the team hangs out</div>
           </div>
         </div>
@@ -577,8 +580,22 @@ export default function TheBreakRoom() {
 
         <main className="caf-main">
           {view === "lobby" && <Lobby profile={profile} goTo={(v) => setView(v)} dmUnread={dmUnread} />}
-          {view === "cafeteria" && <ChatRoom channel={CHANNELS.find((c) => c.id === channel)} profile={profile} />}
-          {view === "board" && <Board profile={profile} />}
+          {view === "cafeteria" && (() => {
+            const c = CHANNELS.find((c) => c.id === channel);
+            return c.type === "chat"
+              ? <ChatRoom channel={c} profile={profile} />
+              : <Forum
+                  profile={profile}
+                  storageKey={`caf-forum-${c.id}`}
+                  headerEmoji={c.emoji}
+                  headerTitle={c.name}
+                  headerSub={c.blurb}
+                  green={c.id === "wellness-commons"}
+                  wellnessNote={c.id === "wellness-commons" ? WELLNESS_NOTE : null}
+                  postVerb="Post"
+                />;
+          })()}
+          {view === "board" && <BulletinBoard profile={profile} />}
           {view === "mail" && <Mailroom profile={profile} index={dmMeta.index} readMap={dmMeta.read} markRead={markDmRead} />}
           {view === "hall" && <Hallway />}
         </main>
@@ -643,7 +660,7 @@ function LoginGate({ onLogin }) {
     <div className="caf-gate">
       <div className="caf-gate-card">
         <div className="caf-gate-emoji"><BrandMark size={46} /></div>
-        <h2>TheBreakRoom</h2>
+        <h2><span className="caf-brand-letter">T</span>he<span className="caf-brand-letter">B</span>reak<span className="caf-brand-letter">R</span>oom</h2>
         {step === "creds" && (
           <>
             <p>Sign in with your phone number and PIN — the same login you use across all the branch apps.</p>
@@ -652,7 +669,7 @@ function LoginGate({ onLogin }) {
               onChange={(e) => setPhone(e.target.value)}
               placeholder="Phone number"
               inputMode="tel"
-              maxLength={16}
+              maxLength={30}
               autoFocus
             />
             <input
@@ -850,12 +867,12 @@ function Lobby({ profile, goTo, dmUnread }) {
         <button className="caf-lobby-card" onClick={() => goTo("cafeteria")}>
           <div className="caf-lobby-card-emoji">🍽️</div>
           <div className="caf-lobby-card-title">Grab a table</div>
-          <div className="caf-lobby-card-text">Six chat rooms in the Main Hall — general talk, wins, The Stage for notices and news, questions for veterans, off-topic, and The Commons for wellness. Everything you post is visible to the whole team.</div>
+          <div className="caf-lobby-card-text">The Big Table is live chat. Wins, The Stage, Ask a Veteran, Off Topic, and The Commons are all post-and-comment forums — make a post, others reply when they get to it. Everything you post is visible to the whole team.</div>
         </button>
         <button className="caf-lobby-card" onClick={() => goTo("board")}>
           <div className="caf-lobby-card-emoji">📌</div>
           <div className="caf-lobby-card-title">Check the board</div>
-          <div className="caf-lobby-card-text">Pin announcements and start threads that deserve more than a chat message. Replies keep the conversation in one place.</div>
+          <div className="caf-lobby-card-text">Manager-only announcements and threads. Set or enter the manager password to get in.</div>
         </button>
         <button className="caf-lobby-card" onClick={() => goTo("mail")}>
           <div className="caf-lobby-card-emoji">📬</div>
@@ -965,15 +982,11 @@ function ChatRoom({ channel, profile }) {
 
   return (
     <div className="caf-chat">
-      <div className={`caf-menuboard ${channel.id === "wellness-commons" ? "green" : ""}`}>
+      <div className="caf-menuboard">
         <div className="caf-menuboard-title">{channel.emoji} {channel.name}</div>
         <div className="caf-menuboard-sub">{channel.blurb}</div>
         <button className="caf-refresh" onClick={refresh} title="Check for new messages">↻ refresh</button>
       </div>
-
-      {channel.id === "wellness-commons" && (
-        <div className="caf-wellnote">🌿 {WELLNESS_NOTE}</div>
-      )}
 
       <div className="caf-msgs">
         {messages === null && <div className="caf-dim">Wiping down the table…</div>}
@@ -1265,7 +1278,31 @@ function DMThread({ profile, other, pairKey, markRead, onBack }) {
 }
 
 /* ---------- Bulletin board (forum) ---------- */
-function Board({ profile }) {
+const SORT_MODES = [
+  { id: "newest", label: "Newest" },
+  { id: "oldest", label: "Oldest" },
+  { id: "replies", label: "Most replies" },
+  { id: "reactions", label: "Most reactions" },
+];
+
+function reactionCount(reacts) {
+  if (!reacts) return 0;
+  return Object.values(reacts).reduce((n, names) => n + (names ? names.length : 0), 0);
+}
+
+function sortPosts(posts, mode) {
+  const copy = [...posts];
+  switch (mode) {
+    case "oldest": return copy.sort((a, b) => a.ts - b.ts);
+    case "replies": return copy.sort((a, b) => b.replies.length - a.replies.length);
+    case "reactions": return copy.sort((a, b) => reactionCount(b.reacts) - reactionCount(a.reacts));
+    case "newest":
+    default: return copy.sort((a, b) => b.ts - a.ts);
+  }
+}
+
+/* ---------- Forum: post + comment, reusable for any room ---------- */
+function Forum({ profile, storageKey, headerEmoji, headerTitle, headerSub, green, wellnessNote, postVerb = "Post" }) {
   const [posts, setPosts] = useState(null);
   const [open, setOpen] = useState(null);
   const [composing, setComposing] = useState(false);
@@ -1275,15 +1312,16 @@ function Board({ profile }) {
   const [busy, setBusy] = useState(false);
   const [attach, setAttach] = useState(null);
   const [attachErr, setAttachErr] = useState("");
-  const KEY = "caf-board-posts";
+  const [sortMode, setSortMode] = useState("newest");
+  const KEY = storageKey;
 
   const refresh = useCallback(async () => {
     const p = await loadShared(KEY, []);
     setPosts(p);
     return p;
-  }, []);
+  }, [KEY]);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { setPosts(null); setOpen(null); refresh(); }, [refresh]);
 
   const submitPost = async () => {
     if (!title.trim() || !body.trim() || busy) return;
@@ -1298,7 +1336,7 @@ function Board({ profile }) {
     const latest = await loadShared(KEY, []);
     const post = { id: uid(), author: profile.name, title: title.trim(), body: body.trim(), ts: Date.now(), replies: [] };
     if (mediaId) post.media = mediaId;
-    const next = [post, ...latest].slice(0, 60);
+    const next = [post, ...latest].slice(0, 200);
     if (await saveShared(KEY, next)) {
       setPosts(next);
       setTitle(""); setBody(""); setAttach(null); setAttachErr(""); setComposing(false);
@@ -1379,19 +1417,22 @@ function Board({ profile }) {
   };
 
   const openPost = posts?.find((p) => p.id === open);
+  const sorted = posts ? sortPosts(posts, sortMode) : [];
 
   return (
     <div className="caf-board">
-      <div className="caf-menuboard cork">
-        <div className="caf-menuboard-title">📌 Bulletin Board</div>
-        <div className="caf-menuboard-sub">Pin things worth keeping: announcements, threads, questions that deserve more than a chat message.</div>
+      <div className={`caf-menuboard ${green ? "green" : "cork"}`}>
+        <div className="caf-menuboard-title">{headerEmoji} {headerTitle}</div>
+        <div className="caf-menuboard-sub">{headerSub}</div>
         <button className="caf-refresh" onClick={refresh}>↻ refresh</button>
       </div>
+
+      {wellnessNote && <div className="caf-wellnote">🌿 {wellnessNote}</div>}
 
       {!openPost && (
         <>
           {!composing ? (
-            <button className="caf-pin-new" onClick={() => setComposing(true)}>+ Pin something to the board</button>
+            <button className="caf-pin-new" onClick={() => setComposing(true)}>+ {postVerb} something</button>
           ) : (
             <div className="caf-pin-form">
               <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" maxLength={90} />
@@ -1399,19 +1440,29 @@ function Board({ profile }) {
               <div className="caf-row">
                 <AttachControl attach={attach} setAttach={setAttach} err={attachErr} setErr={setAttachErr} />
                 <button className="ghost" onClick={() => { setComposing(false); setAttach(null); setAttachErr(""); }}>Cancel</button>
-                <button onClick={submitPost} disabled={!title.trim() || !body.trim() || busy}>Pin it</button>
+                <button onClick={submitPost} disabled={!title.trim() || !body.trim() || busy}>{postVerb} it</button>
               </div>
             </div>
           )}
+
+          {posts !== null && posts.length > 0 && (
+            <div className="caf-sortbar">
+              <span className="caf-sortbar-label">Sort:</span>
+              {SORT_MODES.map((s) => (
+                <button key={s.id} className={sortMode === s.id ? "on" : ""} onClick={() => setSortMode(s.id)}>{s.label}</button>
+              ))}
+            </div>
+          )}
+
           <div className="caf-pins">
-            {posts === null && <div className="caf-dim">Checking the board…</div>}
-            {posts !== null && posts.length === 0 && <div className="caf-dim">The board's empty. First pin gets the good spot.</div>}
-            {posts !== null && posts.map((p) => (
+            {posts === null && <div className="caf-dim">Checking for posts…</div>}
+            {posts !== null && posts.length === 0 && <div className="caf-dim">Nothing here yet. First post gets the good spot.</div>}
+            {posts !== null && sorted.map((p) => (
               <div key={p.id} className="caf-pin-wrap">
                 <button className="caf-pin" onClick={() => setOpen(p.id)}>
                   <div className="caf-pin-title">{p.media ? "🖼 " : ""}{p.title}</div>
                   <div className="caf-pin-body">{p.body.length > 140 ? p.body.slice(0, 140) + "…" : p.body}</div>
-                  <div className="caf-pin-meta">{p.author} · {timeAgo(p.ts)}{p.edited ? " · edited" : ""} · {p.replies.length} {p.replies.length === 1 ? "reply" : "replies"}</div>
+                  <div className="caf-pin-meta">{p.author} · {timeAgo(p.ts)}{p.edited ? " · edited" : ""} · {p.replies.length} {p.replies.length === 1 ? "reply" : "replies"}{reactionCount(p.reacts) > 0 ? ` · ${reactionCount(p.reacts)} reactions` : ""}</div>
                 </button>
                 {p.author === profile.name && (
                   <button className="caf-pin-x" title="Delete this post" onClick={() => deletePost(p.id)} disabled={busyRowId === p.id}>✕</button>
@@ -1424,7 +1475,7 @@ function Board({ profile }) {
 
       {openPost && (
         <div className="caf-thread">
-          <button className="caf-back" onClick={() => setOpen(null)}>← Back to the board</button>
+          <button className="caf-back" onClick={() => setOpen(null)}>← Back</button>
           <div className="caf-thread-card">
             <div className="caf-pin-title big">{openPost.title}</div>
             <div className="caf-pin-meta-row">
@@ -1479,6 +1530,94 @@ function Board({ profile }) {
   );
 }
 
+/* ---------- Bulletin Board: same Forum, gated behind a manager password ---------- */
+function BulletinBoard({ profile }) {
+  const [unlocked, setUnlocked] = useState(false);
+  const [hasPassword, setHasPassword] = useState(null); // null = checking
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const PW_KEY = "caf-board-pw-hash";
+
+  useEffect(() => {
+    (async () => {
+      const stored = await loadShared(PW_KEY, null);
+      setHasPassword(!!stored);
+    })();
+  }, []);
+
+  const submitExisting = async () => {
+    if (!pw) return;
+    setBusy(true);
+    setErr("");
+    const stored = await loadShared(PW_KEY, null);
+    if (stored === hashPin("board", pw)) {
+      setUnlocked(true);
+    } else {
+      setErr("That's not the manager password.");
+    }
+    setBusy(false);
+  };
+
+  const setInitialPassword = async () => {
+    if (!pw) return;
+    setBusy(true);
+    setErr("");
+    const existing = await loadShared(PW_KEY, null);
+    if (existing) {
+      // Someone else set it moments ago — don't overwrite, just ask this person to sign in with it.
+      setHasPassword(true);
+      setBusy(false);
+      return;
+    }
+    const ok = await saveShared(PW_KEY, hashPin("board", pw));
+    setBusy(false);
+    if (ok) setUnlocked(true);
+    else setErr("Couldn't save the password. Try again.");
+  };
+
+  if (unlocked) {
+    return (
+      <Forum
+        profile={profile}
+        storageKey="caf-board-posts"
+        headerEmoji="📌"
+        headerTitle="Bulletin Board"
+        headerSub="Manager announcements and threads that deserve more than a chat message."
+        postVerb="Pin"
+      />
+    );
+  }
+
+  return (
+    <div className="caf-board">
+      <div className="caf-menuboard cork">
+        <div className="caf-menuboard-title">📌 Bulletin Board</div>
+        <div className="caf-menuboard-sub">This board is manager-only.</div>
+      </div>
+      <div className="caf-gate-inline">
+        {hasPassword === null && <div className="caf-dim">Checking…</div>}
+        {hasPassword === false && (
+          <>
+            <p>No manager password has been set yet. If you're a manager, set one now — you'll need it (and so will every other manager) to get in from now on.</p>
+            <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && setInitialPassword()} type="password" placeholder="Choose a manager password" maxLength={60} />
+            {err && <div className="caf-err">{err}</div>}
+            <button disabled={!pw || busy} onClick={setInitialPassword}>{busy ? "Setting…" : "Set password & enter"}</button>
+          </>
+        )}
+        {hasPassword === true && (
+          <>
+            <p>Enter the manager password to view the board.</p>
+            <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitExisting()} type="password" placeholder="Manager password" maxLength={60} />
+            {err && <div className="caf-err">{err}</div>}
+            <button disabled={!pw || busy} onClick={submitExisting}>{busy ? "Checking…" : "Enter"}</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Hallway: doors to the separate branch apps ---------- */
 function Hallway() {
   const [doors, setDoors] = useState(null);
@@ -1489,10 +1628,11 @@ function Hallway() {
   const KEY = "caf-hallway-doors";
   const SEEDED_KEY = "caf-hallway-seeded";
   const DEFAULT_DOORS = [
-    { id: "prosim", name: "ProSim", url: "https://pro-sim-three.vercel.app" },
-    { id: "repline", name: "RepLine", url: "https://repline-theta.vercel.app" },
-    { id: "logbook", name: "LogBook", url: "https://logbook-prosim.vercel.app" },
-    { id: "mosaic", name: "Mosaic — Goal Alignment Platform", url: "https://vision-board-vert.vercel.app" },
+    { id: "prosim", name: "ProSim — Insurance Sales Trainer", url: "https://pro-sim-sepia.vercel.app/" },
+    { id: "repline", name: "RepLine", url: "https://repline-theta.vercel.app/" },
+    { id: "mosaic", name: "Mosaic — Goal Alignment Platform", url: "https://vision-board-vert.vercel.app/" },
+    { id: "logbook", name: "LogBook", url: "https://logbook-prosim.vercel.app/" },
+    { id: "breakroom", name: "TheBreakRoom", url: "https://the-break-room-virid.vercel.app/" },
   ];
 
   useEffect(() => {
@@ -1620,7 +1760,7 @@ function Style() {
       .caf-brand-mark { font-size: 1.6rem; display: inline-flex; }
       .caf-brand-name { font-family: var(--serif); font-weight: 700; font-size: 1.35rem; letter-spacing: .01em; }
       .caf-brand-name { color: var(--text); }
-      .caf-brand-name::first-letter { color: var(--blue); }
+      .caf-brand-letter { color: var(--blue); }
       .caf-brand-sub { font-family: var(--mono); font-size: .62rem; color: var(--dim); letter-spacing: .28em; text-transform: uppercase; margin-top: 2px; }
       .caf-user { margin-left: auto; font-family: var(--mono); font-size: .78rem; background: var(--card); border: 1px solid var(--line); color: var(--body); padding: 6px 13px; border-radius: 999px; }
       .caf-logout { background: none; border: 1px solid var(--line); color: var(--dim); border-radius: 999px; padding: 6px 13px; font-size: .72rem; }
@@ -1758,7 +1898,7 @@ function Style() {
       .caf-msg-text { font-size: .95rem; line-height: 1.55; white-space: pre-wrap; word-break: break-word; color: var(--text); }
 
       .caf-composer { display: flex; gap: 8px; padding-top: 10px; flex-shrink: 0; position: relative; }
-      .caf-composer input, .caf-pin-form input, .caf-pin-form textarea, .caf-gate-card input {
+      .caf-composer input, .caf-pin-form input, .caf-pin-form textarea, .caf-gate-card input, .caf-gate-inline input {
         flex: 1; border: 1px solid var(--line); border-radius: 10px;
         padding: 12px 15px; font-size: .95rem; background: var(--bg1);
         font-family: var(--serif); color: var(--text); width: 100%;
@@ -1767,7 +1907,7 @@ function Style() {
       .caf-composer input:focus, .caf-pin-form input:focus, .caf-pin-form textarea:focus, .caf-gate-card input:focus {
         outline: 1px solid var(--blue); outline-offset: 1px; border-color: var(--blue);
       }
-      .caf-composer button, .caf-pin-form button, .caf-gate-card button, .caf-row button {
+      .caf-composer button, .caf-pin-form button, .caf-gate-card button, .caf-row button, .caf-gate-inline button {
         background: var(--amber); border: none; border-radius: 10px;
         padding: 11px 20px; font-weight: 700; color: #131313; font-size: .8rem; letter-spacing: .04em;
       }
@@ -1829,7 +1969,6 @@ function Style() {
       .caf-gate-card { background: var(--card); border: 1px solid var(--line); border-top: 3px solid var(--amber); border-radius: 18px; padding: 32px; max-width: 430px; width: 100%; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,.45); display: flex; flex-direction: column; }
       .caf-gate-emoji { font-size: 2.3rem; display: flex; justify-content: center; }
       .caf-gate-card h2 { font-family: var(--serif); color: var(--text); margin: 10px 0 8px; font-size: 1.5rem; }
-      .caf-gate-card h2::first-letter { color: var(--blue); }
       .caf-gate-card p { font-size: .88rem; color: var(--body); line-height: 1.55; margin: 0 0 8px; }
       .caf-gate-card input { margin: 6px 0; text-align: center; }
       .caf-gate-card button { width: 100%; margin-top: 8px; }
@@ -1837,6 +1976,16 @@ function Style() {
 
       /* Bulletin board */
       .caf-pin-new { background: transparent; border: 1px dashed rgba(226,168,77,.55); border-radius: 12px; padding: 14px; font-weight: 700; color: var(--amber); width: 100%; margin-bottom: 14px; font-size: .8rem; letter-spacing: .05em; }
+
+      .caf-sortbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      .caf-sortbar-label { font-family: var(--mono); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+      .caf-sortbar button { background: var(--card2); border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px; font-size: .74rem; color: var(--body); }
+      .caf-sortbar button.on { background: var(--amber); border-color: var(--amber-dk); color: #131313; font-weight: 700; }
+      .caf-sortbar button:hover:not(.on) { border-color: var(--blue); color: var(--text); }
+
+      .caf-gate-inline { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; max-width: 420px; }
+      .caf-gate-inline p { font-size: .9rem; color: var(--body); line-height: 1.55; margin: 0 0 12px; }
+      .caf-gate-inline input { margin-bottom: 10px; }
       .caf-pin-new:hover { background: rgba(226,168,77,.07); }
       .caf-pin-form { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
       .caf-pin-form textarea { resize: vertical; }

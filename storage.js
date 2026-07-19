@@ -87,15 +87,13 @@ window.breakroomAuth = {
     if (error) throw error;
     return data || []; // [{ id, name }]
   },
-  // Cross-app SSO: validate + burn a single-use handoff token minted by the
-  // shared sign-in (LogBook). Returns the student on success, null otherwise.
+  // Consumes a single-use handoff token minted by LogBook (or any app that
+  // holds the service-role key) — lets someone arrive here already logged in
+  // via a link like .../?handoff=TOKEN, with no shared secret ever exposed
+  // to this client-side code. Tokens are single-use and expire in ~60s.
   async consumeHandoff(token) {
-    try {
-      const { data, error } = await supabase.rpc("branch_consume_handoff", { p_token: token });
-      if (error) return null;
-      return data?.status === "ok" ? data.student : null;
-    } catch {
-      return null;
-    }
+    const { data, error } = await supabase.rpc("branch_consume_handoff", { p_token: token });
+    if (error) throw error;
+    return data; // { status: 'ok', student } or { status: 'invalid' }
   },
 };
