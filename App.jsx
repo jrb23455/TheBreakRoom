@@ -347,10 +347,39 @@ export default function TheBreakRoom() {
 
   useEffect(() => {
     (async () => {
+      // Cross-app SSO: arriving with ?handoff=TOKEN from the shared sign-in
+      // logs the person straight in. The token is single-use — strip it so a
+      // refresh can't fail on a spent token.
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get("handoff");
+      if (token) {
+        const student = await window.breakroomAuth.consumeHandoff(token);
+        params.delete("handoff");
+        const rest = params.toString();
+        window.history.replaceState(null, "", window.location.pathname + (rest ? "?" + rest : ""));
+        if (student?.id) {
+          const p = { id: student.id, name: student.name, phone: student.phone, joined: Date.now() };
+          try { await window.storage.set("caf-session", JSON.stringify(p)); } catch (e) {}
+          setProfile(p);
+          setProfileLoaded(true);
+          return;
+        }
+      }
       try {
         const r = await window.storage.get("caf-session");
-        if (r) setProfile(JSON.parse(r.value));
+        if (r) {
+          setProfile(JSON.parse(r.value));
+          setProfileLoaded(true);
+          return;
+        }
       } catch (e) {}
+      // Signed out and no token — go to the shared sign-in (which owns 2FA)
+      // unless ?local=1 forces Breakroom's own phone/PIN gate.
+      if (params.get("local") !== "1") {
+        const ret = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.href = `https://logbook-prosim.vercel.app/login?app=breakroom&return=${ret}`;
+        return;
+      }
       setProfileLoaded(true);
     })();
   }, []);
