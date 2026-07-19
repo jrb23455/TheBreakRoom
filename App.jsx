@@ -327,15 +327,15 @@ function AttachControl({ attach, setAttach, err, setErr }) {
 function BrandMark({ size = 28 }) {
   return (
     <svg width={size} height={size} viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="100" cy="100" r="78" stroke="#e9edf7" strokeWidth="5" />
+      <circle cx="100" cy="100" r="78" stroke="#e9edf7" strokeWidth="6" />
       <path
         d="M 126,36 C 108,38 100,50 93,64 C 87,76 82,84 70,98 C 82,104 88,110 93,120 C 100,134 106,148 122,154 C 130,157 136,155 140,150"
-        stroke="#e9edf7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round"
+        stroke="#e9edf7" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round"
       />
-      <path d="M 82,86 A 14,14 0 0 0 82,114" stroke="#88aef1" strokeWidth="5" strokeLinecap="round" />
-      <path d="M 82,72 A 28,28 0 0 0 82,128" stroke="#e2a84d" strokeWidth="5" strokeLinecap="round" />
-      <path d="M 82,58 A 42,42 0 0 0 82,142" stroke="#74c690" strokeWidth="5" strokeLinecap="round" />
-      <path d="M 82,43 A 57,57 0 0 0 82,157" stroke="#e0718a" strokeWidth="5" strokeLinecap="round" />
+      <path d="M 68,88 A 12,12 0 0 0 68,112" stroke="#88aef1" strokeWidth="6" strokeLinecap="round" />
+      <path d="M 68,76 A 24,24 0 0 0 68,124" stroke="#e2a84d" strokeWidth="6" strokeLinecap="round" />
+      <path d="M 68,64 A 36,36 0 0 0 68,136" stroke="#74c690" strokeWidth="6" strokeLinecap="round" />
+      <path d="M 68,52 A 48,48 0 0 0 68,148" stroke="#e0718a" strokeWidth="6" strokeLinecap="round" />
     </svg>
   );
 }
@@ -1457,9 +1457,29 @@ function Hallway() {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const KEY = "caf-hallway-doors";
+  const SEEDED_KEY = "caf-hallway-seeded";
+  const DEFAULT_DOORS = [
+    { id: "prosim", name: "ProSim", url: "https://pro-sim-three.vercel.app" },
+    { id: "repline", name: "RepLine", url: "https://repline-theta.vercel.app" },
+    { id: "logbook", name: "LogBook", url: "https://logbook-prosim.vercel.app" },
+    { id: "mosaic", name: "Mosaic — Goal Alignment Platform", url: "https://vision-board-vert.vercel.app" },
+  ];
 
   useEffect(() => {
-    (async () => setDoors(await loadShared(KEY, [])))();
+    (async () => {
+      const existing = await loadShared(KEY, []);
+      if (existing.length > 0) { setDoors(existing); return; }
+      // Only seed the starter set once, ever — so intentionally clearing the
+      // hallway later doesn't just bring the defaults back.
+      const seeded = await loadShared(SEEDED_KEY, false);
+      if (!seeded) {
+        await saveShared(KEY, DEFAULT_DOORS);
+        await saveShared(SEEDED_KEY, true);
+        setDoors(DEFAULT_DOORS);
+      } else {
+        setDoors(existing);
+      }
+    })();
   }, []);
 
   const addDoor = async () => {
