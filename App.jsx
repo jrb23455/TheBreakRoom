@@ -1632,7 +1632,6 @@ function Hallway() {
     { id: "repline", name: "RepLine", url: "https://repline-theta.vercel.app/" },
     { id: "mosaic", name: "Mosaic — Goal Alignment Platform", url: "https://vision-board-vert.vercel.app/" },
     { id: "logbook", name: "LogBook", url: "https://logbook-prosim.vercel.app/" },
-    { id: "breakroom", name: "TheBreakRoom", url: "https://the-break-room-virid.vercel.app/" },
   ];
 
   useEffect(() => {
