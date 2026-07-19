@@ -34,14 +34,12 @@ const timeAgo = (ts) => {
   return new Date(ts).toLocaleDateString();
 };
 
-const normalizePhone = (raw) => raw.replace(/\D/g, "").slice(-10);
-const hashPin = (phone, pin) => {
-  // Lightweight obfuscation so PINs aren't stored as plain text.
-  // This is convenience-level security, not real authentication.
-  let h = 5381;
-  const s = `caf|${phone}|${pin}|v1`;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
-  return h.toString(16) + "-" + s.length.toString(16);
+// E.164 format ("+18088555423") — matches the phone format already stored in the
+// shared `students` table that ProSim/RepLine use, so the same number lines up
+// across every app instead of TheBreakRoom keeping its own separate format.
+const normalizePhone = (raw) => {
+  const digits = raw.replace(/\D/g, "").slice(-10);
+  return digits.length === 10 ? "+1" + digits : "";
 };
 
 const ONLINE_WINDOW = 2 * 60 * 1000; // seen in the last 2 minutes = "here now"
@@ -369,7 +367,7 @@ export default function TheBreakRoom() {
       for (const k of Object.keys(pres)) {
         if (now - (pres[k].lastSeen || 0) < RECENT_WINDOW) next[k] = pres[k];
       }
-      next[profile.phone] = { name: profile.name, lastSeen: now, joined: profile.joined };
+      next[profile.id] = { name: profile.name, lastSeen: now, joined: profile.joined };
       await saveShared("caf-presence", next);
     };
     beat();
@@ -406,8 +404,8 @@ export default function TheBreakRoom() {
 
   const dmUnread = profile
     ? Object.entries(dmMeta.index).filter(([k, v]) =>
-        (v.a === profile.phone || v.b === profile.phone) &&
-        v.lastFrom !== profile.phone &&
+        (v.a === profile.id || v.b === profile.id) &&
+        v.lastFrom !== profile.id &&
         v.lastTs > (dmMeta.read[k] || 0)
       ).length
     : 0;
@@ -439,10 +437,6 @@ export default function TheBreakRoom() {
       let presChanged = false;
       FORMER_BOT_PHONES.forEach((p) => { if (pres[p]) { delete pres[p]; presChanged = true; } });
       if (presChanged) await saveShared("caf-presence", pres);
-      const accounts = await loadShared("caf-accounts", {});
-      let acctChanged = false;
-      FORMER_BOT_PHONES.forEach((p) => { if (accounts[p]) { delete accounts[p]; acctChanged = true; } });
-      if (acctChanged) await saveShared("caf-accounts", accounts);
       const idx = await loadShared("caf-dm-index", {});
       let idxChanged = false;
       for (const [k, v] of Object.entries(idx)) {
@@ -468,8 +462,8 @@ export default function TheBreakRoom() {
     // Mark yourself gone from the presence board, then clear the local session.
     if (profile) {
       const pres = await loadShared("caf-presence", {});
-      if (pres[profile.phone]) {
-        pres[profile.phone] = { ...pres[profile.phone], lastSeen: Date.now() - ONLINE_WINDOW - 1000 };
+      if (pres[profile.id]) {
+        pres[profile.id] = { ...pres[profile.id], lastSeen: Date.now() - ONLINE_WINDOW - 1000 };
         await saveShared("caf-presence", pres);
       }
     }
@@ -576,42 +570,44 @@ function LoginGate({ onLogin }) {
   const submitCreds = async () => {
     setErr("");
     const p = normalizePhone(phone);
-    if (p.length !== 10) { setErr("Enter a 10-digit phone number."); return; }
+    if (!p) { setErr("Enter a 10-digit phone number."); return; }
     if (!/^\d{4,6}$/.test(pin)) { setErr("PIN should be 4–6 digits."); return; }
     setBusy(true);
-    const accounts = await loadShared("caf-accounts", {});
-    const acct = accounts[p];
-    if (acct) {
-      if (acct.pinHash === hashPin(p, pin)) {
-        onLogin({ name: acct.name, phone: p, joined: acct.joined });
-      } else {
+    try {
+      const result = await window.breakroomAuth.login(p, pin, null);
+      if (result.status === "ok") {
+        onLogin({ id: result.student.id, name: result.student.name, phone: result.student.phone, joined: Date.now() });
+      } else if (result.status === "wrong_pin") {
         setErr("That PIN doesn't match this phone number.");
+      } else if (result.status === "needs_name") {
+        setStep("newname");
+      } else {
+        setErr(result.message || "Something went wrong. Try again.");
       }
-      setBusy(false);
-    } else {
-      setBusy(false);
-      setStep("newname");
+    } catch (e) {
+      setErr("Couldn't reach the login system. Check your connection and try again.");
     }
+    setBusy(false);
   };
 
   const createAccount = async () => {
     if (!name.trim()) return;
     setBusy(true);
+    setErr("");
     const p = normalizePhone(phone);
-    const accounts = await loadShared("caf-accounts", {});
-    if (accounts[p]) {
-      // Someone registered this number while you were typing — verify instead.
-      setErr("This number just got registered. Try signing in.");
+    try {
+      const result = await window.breakroomAuth.login(p, pin, name.trim());
+      if (result.status === "ok") {
+        onLogin({ id: result.student.id, name: result.student.name, phone: result.student.phone, joined: Date.now() });
+      } else {
+        setErr(result.message || "Couldn't create your account. Try again.");
+        setStep("creds");
+      }
+    } catch (e) {
+      setErr("Couldn't reach the login system. Check your connection and try again.");
       setStep("creds");
-      setBusy(false);
-      return;
     }
-    const acct = { name: name.trim(), pinHash: hashPin(p, pin), joined: Date.now() };
-    accounts[p] = acct;
-    const ok = await saveShared("caf-accounts", accounts);
     setBusy(false);
-    if (ok) onLogin({ name: acct.name, phone: p, joined: acct.joined });
-    else setErr("Couldn't save your account. Try again.");
   };
 
   return (
@@ -621,7 +617,7 @@ function LoginGate({ onLogin }) {
         <h2>TheBreakRoom</h2>
         {step === "creds" && (
           <>
-            <p>Sign in with your phone number and PIN — the same login you'll use across all the branch apps.</p>
+            <p>Sign in with your phone number and PIN — the same login you use across all the branch apps.</p>
             <input
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
@@ -640,7 +636,7 @@ function LoginGate({ onLogin }) {
             />
             {err && <div className="caf-err">{err}</div>}
             <button disabled={busy} onClick={submitCreds}>{busy ? "Checking…" : "Come on in"}</button>
-            <p className="caf-fineprint">New here? Enter the phone + PIN you want to use and we'll set you up. Don't reuse a PIN you use for banking — this is a team app, not a vault.</p>
+            <p className="caf-fineprint">New here? Enter the phone + PIN you want to use and we'll set you up. This is the same account used by ProSim, RepLine, and the other branch apps.</p>
           </>
         )}
         {step === "newname" && (
@@ -771,7 +767,7 @@ function Lobby({ profile, goTo, dmUnread }) {
 
   const entries = presence
     ? Object.entries(presence)
-        .map(([phone, v]) => ({ phone, ...v }))
+        .map(([id, v]) => ({ id, ...v }))
         .sort((a, b) => b.lastSeen - a.lastSeen)
     : [];
   const online = entries.filter((e) => now - e.lastSeen < ONLINE_WINDOW);
@@ -806,13 +802,13 @@ function Lobby({ profile, goTo, dmUnread }) {
 
         <div className="caf-roster">
           {online.map((e) => (
-            <span key={e.phone} className="caf-chip live">
+            <span key={e.id} className="caf-chip live">
               <span className="caf-dot live" />
-              {e.name}{e.phone === profile.phone ? " (you)" : ""}
+              {e.name}{e.id === profile.id ? " (you)" : ""}
             </span>
           ))}
           {recent.map((e) => (
-            <span key={e.phone} className="caf-chip away" title={`seen ${timeAgo(e.lastSeen)}`}>
+            <span key={e.id} className="caf-chip away" title={`seen ${timeAgo(e.lastSeen)}`}>
               <span className="caf-dot" />
               {e.name}
               <span className="caf-chip-time">{timeAgo(e.lastSeen)}</span>
@@ -1003,28 +999,33 @@ function ChatRoom({ channel, profile }) {
 const pairKeyFor = (a, b) => "dm-" + [a, b].sort().join("-");
 
 function Mailroom({ profile, index, readMap, markRead }) {
-  const [accounts, setAccounts] = useState(null);
-  const [openConvo, setOpenConvo] = useState(null); // { pairKey, other: {phone, name} }
+  const [people, setPeople] = useState(null);
+  const [openConvo, setOpenConvo] = useState(null); // { pairKey, other: {id, name} }
   const [picking, setPicking] = useState(false);
 
   useEffect(() => {
-    (async () => setAccounts(await loadShared("caf-accounts", {})))();
+    (async () => {
+      try {
+        setPeople(await window.breakroomAuth.listPeople());
+      } catch (e) {
+        setPeople([]);
+      }
+    })();
   }, []);
 
-  const me = profile.phone;
+  const me = profile.id;
   const convos = Object.entries(index)
     .filter(([, v]) => v.a === me || v.b === me)
     .map(([k, v]) => {
-      const otherPhone = v.a === me ? v.b : v.a;
+      const otherId = v.a === me ? v.b : v.a;
       const otherName = v.a === me ? v.bn : v.an;
-      return { pairKey: k, other: { phone: otherPhone, name: otherName }, lastTs: v.lastTs, unread: v.lastFrom !== me && v.lastTs > (readMap[k] || 0) };
+      return { pairKey: k, other: { id: otherId, name: otherName }, lastTs: v.lastTs, unread: v.lastFrom !== me && v.lastTs > (readMap[k] || 0) };
     })
     .sort((x, y) => y.lastTs - x.lastTs);
 
-  const members = accounts
-    ? Object.entries(accounts)
-        .filter(([phone]) => phone !== me)
-        .map(([phone, a]) => ({ phone, name: a.name }))
+  const members = people
+    ? people
+        .filter((p) => p.id !== me)
         .sort((x, y) => x.name.localeCompare(y.name))
     : [];
 
@@ -1044,7 +1045,7 @@ function Mailroom({ profile, index, readMap, markRead }) {
     <div className="caf-mail">
       <div className="caf-menuboard">
         <div className="caf-menuboard-title">📬 The Mailroom</div>
-        <div className="caf-menuboard-sub">One-on-one messages, out of the main rooms. Heads up: this is workplace-private, not vault-private — same rule as everywhere else, nothing you wouldn't want on a breakroom whiteboard.</div>
+        <div className="caf-menuboard-sub">One-on-one messages, out of the main rooms. This directory is shared with ProSim, RepLine, and the other branch apps — same people, same accounts. Heads up: this is workplace-private, not vault-private — same rule as everywhere else, nothing you wouldn't want on a breakroom whiteboard.</div>
       </div>
 
       {!picking ? (
@@ -1055,13 +1056,13 @@ function Mailroom({ profile, index, readMap, markRead }) {
             <span>Who are you writing to?</span>
             <button className="ghost" onClick={() => setPicking(false)}>Cancel</button>
           </div>
-          {accounts === null && <div className="caf-dim">Checking the directory…</div>}
-          {accounts !== null && members.length === 0 && <div className="caf-dim">Nobody else has signed up yet. Recruit some coworkers!</div>}
+          {people === null && <div className="caf-dim">Checking the directory…</div>}
+          {people !== null && members.length === 0 && <div className="caf-dim">Nobody else has signed up yet. Recruit some coworkers!</div>}
           {members.map((m) => (
             <button
-              key={m.phone}
+              key={m.id}
               className="caf-member"
-              onClick={() => { setPicking(false); setOpenConvo({ pairKey: pairKeyFor(me, m.phone), other: m }); }}
+              onClick={() => { setPicking(false); setOpenConvo({ pairKey: pairKeyFor(me, m.id), other: m }); }}
             >
               ✉️ {m.name}
             </button>
@@ -1121,21 +1122,21 @@ function DMThread({ profile, other, pairKey, markRead, onBack }) {
       mediaCache[mediaId] = attach;
     }
     const latest = await loadShared(key, []);
-    const msg = { id: uid(), author: profile.name, from: profile.phone, text, ts: Date.now() };
+    const msg = { id: uid(), author: profile.name, from: profile.id, text, ts: Date.now() };
     if (mediaId) msg.media = mediaId;
     const next = [...latest, msg].slice(-100);
     const ok = await saveShared(key, next);
     if (ok) {
       // Update the shared conversation index so both mailboxes see this thread.
-      const [p1, p2] = [profile.phone, other.phone].sort();
+      const [p1, p2] = [profile.id, other.id].sort();
       const idx = await loadShared("caf-dm-index", {});
       idx[pairKey] = {
         a: p1,
         b: p2,
-        an: p1 === profile.phone ? profile.name : other.name,
-        bn: p2 === profile.phone ? profile.name : other.name,
+        an: p1 === profile.id ? profile.name : other.name,
+        bn: p2 === profile.id ? profile.name : other.name,
         lastTs: Date.now(),
-        lastFrom: profile.phone,
+        lastFrom: profile.id,
       };
       await saveShared("caf-dm-index", idx);
       setMessages(next);
@@ -1183,7 +1184,7 @@ function DMThread({ profile, other, pairKey, markRead, onBack }) {
           <div className="caf-dim">No messages yet. Start the thread.</div>
         )}
         {messages !== null && messages.map((m) => {
-          const mine = m.from ? m.from === profile.phone : m.author === profile.name;
+          const mine = m.from ? m.from === profile.id : m.author === profile.name;
           return (
             <div key={m.id} className={`caf-msg ${mine ? "mine" : ""}`}>
               <div className="caf-msg-meta">

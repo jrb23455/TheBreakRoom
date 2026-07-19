@@ -5,9 +5,9 @@ instead of Claude's artifact-only storage.
 
 ## Files (all sit at the top level on purpose — no subfolders)
 
-- `App.jsx` — the app itself, unchanged from the Claude artifact.
-- `storage.js` — **new**. Replaces `window.storage` with real calls to a Supabase
-  table (`breakroom_kv_store`) so data actually persists on the internet.
+- `App.jsx` — the app itself.
+- `storage.js` — replaces `window.storage` with real Supabase calls, and adds
+  `window.breakroomAuth` for shared login (see below).
 - `main.jsx` — loads `storage.js`, then renders `App.jsx`.
 - `index.html` — entry point. The favicon is embedded directly in this file
   (as a data URI) so there's no separate image file to lose track of.
@@ -15,6 +15,22 @@ instead of Claude's artifact-only storage.
 
 There are no subfolders anywhere in this project, on purpose — that way there's
 nothing for a drag-and-drop upload to accidentally flatten or misplace.
+
+## Shared login across your apps
+
+TheBreakRoom's phone + PIN login is no longer its own separate account list —
+it calls the same `branch_login` function and `students` table that ProSim and
+RepLine already use. Sign up or sign in once with a phone + PIN, and that same
+login works in every app connected to this system. The Mailroom's "who can I
+message" directory is the same shared list too (via `breakroom_list_people`),
+so it shows everyone across every connected app, not just people who've opened
+TheBreakRoom specifically.
+
+Two small database additions were made to support this (both non-destructive,
+neither touches any existing ProSim/RepLine data):
+- `breakroom_kv_store` — TheBreakRoom's own chat/board/DM/presence data.
+- `breakroom_list_people()` — a read-only function exposing just id + name
+  (never phone or PIN) for the Mailroom directory.
 
 ## Uploading to GitHub
 

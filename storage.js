@@ -68,3 +68,23 @@ window.storage = {
     return { keys: (data || []).map((r) => r.key), prefix, shared };
   },
 };
+
+// Shared login/identity — talks to the SAME `students` table and `branch_login`
+// function that ProSim/RepLine already use, so one phone + PIN works everywhere
+// instead of TheBreakRoom keeping its own separate account list.
+window.breakroomAuth = {
+  async login(phone, pin, name) {
+    const { data, error } = await supabase.rpc("branch_login", {
+      p_phone: phone,
+      p_pin: pin,
+      p_name: name || null,
+    });
+    if (error) throw error;
+    return data; // { status: 'ok'|'needs_name'|'wrong_pin'|'error', student?, message? }
+  },
+  async listPeople() {
+    const { data, error } = await supabase.rpc("breakroom_list_people");
+    if (error) throw error;
+    return data || []; // [{ id, name }]
+  },
+};
