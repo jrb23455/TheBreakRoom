@@ -34,14 +34,6 @@ const timeAgo = (ts) => {
   return new Date(ts).toLocaleDateString();
 };
 
-// E.164 format ("+18088555423") — matches the phone format already stored in the
-// shared `students` table that ProSim/RepLine use, so the same number lines up
-// across every app instead of TheBreakRoom keeping its own separate format.
-const normalizePhone = (raw) => {
-  const digits = raw.replace(/\D/g, "").slice(-10);
-  return digits.length === 10 ? "+1" + digits : "";
-};
-
 const ONLINE_WINDOW = 2 * 60 * 1000; // seen in the last 2 minutes = "here now"
 const RECENT_WINDOW = 24 * 60 * 60 * 1000;
 
@@ -351,39 +343,31 @@ function BrandMark({ size = 28 }) {
 export default function TheBreakRoom() {
   const [profile, setProfile] = useState(null); // { name, phone, joined }
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
   const [view, setView] = useState("lobby");
   const [channel, setChannel] = useState("big-table");
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
-      // Arriving via a link from LogBook (or any app minting handoff tokens)?
-      // .../?handoff=TOKEN logs you straight in — no separate password step.
-      const params = new URLSearchParams(window.location.search);
-      const handoffToken = params.get("handoff");
-      if (handoffToken) {
-        // Clean the token out of the URL immediately either way — it's single-use
-        // and shouldn't linger in the address bar, browser history, or a reload.
-        params.delete("handoff");
-        const clean = window.location.pathname + (params.toString() ? `?${params}` : "");
-        window.history.replaceState({}, "", clean);
-        try {
-          const result = await window.breakroomAuth.consumeHandoff(handoffToken);
-          if (result.status === "ok") {
-            const p = { id: result.student.id, name: result.student.name, phone: result.student.phone, joined: Date.now() };
-            setProfile(p);
-            try { await window.storage.set("caf-session", JSON.stringify(p)); } catch (e) {}
-            setProfileLoaded(true);
-            return;
-          }
-          // Invalid/expired token — fall through to the normal session check below.
-        } catch (e) {}
-      }
+      // Real shared login now lives at topclosers.wtf. This checks the
+      // browser's actual shared-domain session cookie — if it's not valid,
+      // there is no local login form anymore; the only way in is through
+      // the central login page.
+      let s;
       try {
-        const r = await window.storage.get("caf-session");
-        if (r) setProfile(JSON.parse(r.value));
-      } catch (e) {}
-      setProfileLoaded(true);
+        const res = await fetch("https://auth.topclosers.wtf/api/session", { credentials: "include" });
+        s = await res.json();
+      } catch (e) {
+        s = { status: "error" };
+      }
+      if (s.status === "ok" && s.student) {
+        setProfile({ id: s.student.id, name: s.student.name, phone: s.student.phone, joined: Date.now() });
+        setProfileLoaded(true);
+      } else {
+        setRedirecting(true);
+        window.location.href = "https://topclosers.wtf/?return=" + encodeURIComponent(window.location.href);
+      }
     })();
   }, []);
 
@@ -483,15 +467,8 @@ export default function TheBreakRoom() {
     })();
   }, [profile]);
 
-  const handleLogin = async (p) => {
-    setProfile(p);
-    try {
-      await window.storage.set("caf-session", JSON.stringify(p));
-    } catch (e) {}
-  };
-
   const logout = async () => {
-    // Mark yourself gone from the presence board, then clear the local session.
+    // Mark yourself gone from the presence board first.
     if (profile) {
       const pres = await loadShared("caf-presence", {});
       if (pres[profile.id]) {
@@ -499,25 +476,33 @@ export default function TheBreakRoom() {
         await saveShared("caf-presence", pres);
       }
     }
-    try { await window.storage.delete("caf-session"); } catch (e) {}
-    setProfile(null);
-    setView("lobby");
+    // Clear the real shared session at the auth service, not just local state —
+    // otherwise reloading this page (or any other app) logs you right back in.
+    // NOTE: assuming POST /api/logout on the same auth host — flag if that's
+    // not the actual path/method, since this is the one endpoint I'm inferring
+    // rather than one you handed me directly.
+    try {
+      await fetch("https://auth.topclosers.wtf/api/logout", { method: "POST", credentials: "include" });
+    } catch (e) {}
+    window.location.href = "https://topclosers.wtf/";
   };
 
   if (!profileLoaded) {
     return (
       <div className="caf-root">
         <Style />
-        <div className="caf-loading">Setting the tables…</div>
+        <div className="caf-loading">{redirecting ? "Taking you to sign in…" : "Setting the tables…"}</div>
       </div>
     );
   }
 
   if (!profile) {
+    // Shouldn't normally be reached — the effect above redirects before this
+    // renders — but if it ever is, don't show a broken app with no way in.
     return (
       <div className="caf-root">
         <Style />
-        <LoginGate onLogin={handleLogin} />
+        <div className="caf-loading">Taking you to sign in…</div>
       </div>
     );
   }
@@ -604,110 +589,6 @@ export default function TheBreakRoom() {
   );
 }
 
-/* ---------- Login gate: phone + PIN ---------- */
-function LoginGate({ onLogin }) {
-  const [phone, setPhone] = useState("");
-  const [pin, setPin] = useState("");
-  const [name, setName] = useState("");
-  const [step, setStep] = useState("creds"); // creds | newname
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const submitCreds = async () => {
-    setErr("");
-    const p = normalizePhone(phone);
-    if (!p) { setErr("Enter a 10-digit phone number."); return; }
-    if (!/^\d{4,6}$/.test(pin)) { setErr("PIN should be 4–6 digits."); return; }
-    setBusy(true);
-    try {
-      const result = await window.breakroomAuth.login(p, pin, null);
-      if (result.status === "ok") {
-        onLogin({ id: result.student.id, name: result.student.name, phone: result.student.phone, joined: Date.now() });
-      } else if (result.status === "wrong_pin") {
-        setErr("That PIN doesn't match this phone number.");
-      } else if (result.status === "needs_name") {
-        setStep("newname");
-      } else {
-        setErr(result.message || "Something went wrong. Try again.");
-      }
-    } catch (e) {
-      setErr("Couldn't reach the login system. Check your connection and try again.");
-    }
-    setBusy(false);
-  };
-
-  const createAccount = async () => {
-    if (!name.trim()) return;
-    setBusy(true);
-    setErr("");
-    const p = normalizePhone(phone);
-    try {
-      const result = await window.breakroomAuth.login(p, pin, name.trim());
-      if (result.status === "ok") {
-        onLogin({ id: result.student.id, name: result.student.name, phone: result.student.phone, joined: Date.now() });
-      } else {
-        setErr(result.message || "Couldn't create your account. Try again.");
-        setStep("creds");
-      }
-    } catch (e) {
-      setErr("Couldn't reach the login system. Check your connection and try again.");
-      setStep("creds");
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div className="caf-gate">
-      <div className="caf-gate-card">
-        <div className="caf-gate-emoji"><BrandMark size={46} /></div>
-        <h2><span className="caf-brand-letter">T</span>he<span className="caf-brand-letter">B</span>reak<span className="caf-brand-letter">R</span>oom</h2>
-        {step === "creds" && (
-          <>
-            <p>Sign in with your phone number and PIN — the same login you use across all the branch apps.</p>
-            <input
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="Phone number"
-              inputMode="tel"
-              maxLength={30}
-              autoFocus
-            />
-            <input
-              value={pin}
-              onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              onKeyDown={(e) => e.key === "Enter" && submitCreds()}
-              placeholder="PIN (4–6 digits)"
-              type="password"
-              inputMode="numeric"
-            />
-            {err && <div className="caf-err">{err}</div>}
-            <button disabled={busy} onClick={submitCreds}>{busy ? "Checking…" : "Come on in"}</button>
-            <p className="caf-fineprint">New here? Enter the phone + PIN you want to use and we'll set you up. This is the same account used by ProSim, RepLine, and the other branch apps.</p>
-          </>
-        )}
-        {step === "newname" && (
-          <>
-            <p>First time in the building — welcome. What name should go on your name tag?</p>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && createAccount()}
-              placeholder="e.g. Sam R."
-              maxLength={30}
-              autoFocus
-            />
-            {err && <div className="caf-err">{err}</div>}
-            <button disabled={!name.trim() || busy} onClick={createAccount}>{busy ? "Printing name tag…" : "Make my name tag"}</button>
-            <button className="ghost" onClick={() => { setStep("creds"); setErr(""); }}>← Back</button>
-            <p className="caf-fineprint">Your display name is public. Your phone number and PIN are never shown to anyone.</p>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ---------- The Lobby: landing page + who's here ---------- */
 /* ---------- Morning Brief: what happened since you were last here ---------- */
 function MorningBrief({ profile, dmUnread }) {
   const [brief, setBrief] = useState(null); // null = loading
@@ -1620,96 +1501,31 @@ function BulletinBoard({ profile }) {
 
 /* ---------- Hallway: doors to the separate branch apps ---------- */
 function Hallway() {
-  const [doors, setDoors] = useState(null);
-  const [adding, setAdding] = useState(false);
-  const [name, setName] = useState("");
-  const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const KEY = "caf-hallway-doors";
-  const SEEDED_KEY = "caf-hallway-seeded";
-  const DEFAULT_DOORS = [
+  const DOORS = [
     { id: "prosim", name: "ProSim — Insurance Sales Trainer", url: "https://pro-sim-sepia.vercel.app/" },
     { id: "repline", name: "RepLine", url: "https://repline-theta.vercel.app/" },
     { id: "mosaic", name: "Mosaic — Goal Alignment Platform", url: "https://vision-board-vert.vercel.app/" },
     { id: "logbook", name: "LogBook", url: "https://logbook-prosim.vercel.app/" },
   ];
 
-  useEffect(() => {
-    (async () => {
-      const existing = await loadShared(KEY, []);
-      if (existing.length > 0) { setDoors(existing); return; }
-      // Only seed the starter set once, ever — so intentionally clearing the
-      // hallway later doesn't just bring the defaults back.
-      const seeded = await loadShared(SEEDED_KEY, false);
-      if (!seeded) {
-        await saveShared(KEY, DEFAULT_DOORS);
-        await saveShared(SEEDED_KEY, true);
-        setDoors(DEFAULT_DOORS);
-      } else {
-        setDoors(existing);
-      }
-    })();
-  }, []);
-
-  const addDoor = async () => {
-    const n = name.trim();
-    let u = url.trim();
-    if (!n || !u || busy) return;
-    if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-    setBusy(true);
-    const latest = await loadShared(KEY, []);
-    const next = [...latest, { id: uid(), name: n, url: u }].slice(0, 30);
-    if (await saveShared(KEY, next)) {
-      setDoors(next);
-      setName(""); setUrl(""); setAdding(false);
-    }
-    setBusy(false);
-  };
-
-  const removeDoor = async (id) => {
-    const latest = await loadShared(KEY, []);
-    const next = latest.filter((d) => d.id !== id);
-    if (await saveShared(KEY, next)) setDoors(next);
-  };
-
   return (
     <div className="caf-hall">
       <div className="caf-menuboard">
         <div className="caf-menuboard-title">🚪 Other Buildings</div>
-        <div className="caf-menuboard-sub">TheBreakRoom is just the hangout — the Claims Wing and other tools live in their own apps. Post their links here so everyone can find the doors. Same phone + PIN gets you in everywhere.</div>
+        <div className="caf-menuboard-sub">TheBreakRoom is just the hangout — the Claims Wing and other tools live in their own apps. Same phone + PIN gets you in everywhere.</div>
       </div>
 
-      {doors !== null && doors.length === 0 && !adding && (
-        <div className="caf-dim" style={{ marginBottom: 12 }}>No doors posted yet. When a branch app goes live, add its link here.</div>
-      )}
-      {doors === null && <div className="caf-dim">Checking the hallway…</div>}
-
       <div className="caf-doors">
-        {doors !== null && doors.map((d) => (
+        {DOORS.map((d) => (
           <div key={d.id} className="caf-door">
             <a href={d.url} target="_blank" rel="noreferrer" className="caf-door-link">
               <span className="caf-door-emoji">🚪</span>
               <span className="caf-door-name">{d.name}</span>
               <span className="caf-door-go">Enter →</span>
             </a>
-            <button className="caf-door-x" title="Remove this door" onClick={() => removeDoor(d.id)}>✕</button>
           </div>
         ))}
       </div>
-
-      {!adding ? (
-        <button className="caf-pin-new" onClick={() => setAdding(true)}>+ Add a door</button>
-      ) : (
-        <div className="caf-pin-form">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="App name (e.g. Claims Wing)" maxLength={50} />
-          <input value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addDoor()} placeholder="Link to the app" maxLength={300} />
-          <div className="caf-row">
-            <button className="ghost" onClick={() => setAdding(false)}>Cancel</button>
-            <button onClick={addDoor} disabled={!name.trim() || !url.trim() || busy}>Hang the sign</button>
-          </div>
-        </div>
-      )}
-      <p className="caf-dim" style={{ marginTop: 12 }}>Doors are shared — everyone sees the same list, and anyone can add or remove one.</p>
     </div>
   );
 }

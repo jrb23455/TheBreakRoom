@@ -16,21 +16,35 @@ instead of Claude's artifact-only storage.
 There are no subfolders anywhere in this project, on purpose — that way there's
 nothing for a drag-and-drop upload to accidentally flatten or misplace.
 
-## Shared login across your apps
+## Login — now fully centralized
 
-TheBreakRoom's phone + PIN login is no longer its own separate account list —
-it calls the same `branch_login` function and `students` table that ProSim and
-RepLine already use. Sign up or sign in once with a phone + PIN, and that same
-login works in every app connected to this system. The Mailroom's "who can I
-message" directory is the same shared list too (via `breakroom_list_people`),
-so it shows everyone across every connected app, not just people who've opened
-TheBreakRoom specifically.
+TheBreakRoom has no login form of its own anymore. On load, it checks
+`https://auth.topclosers.wtf/api/session` (with credentials/cookies
+included). If that comes back logged-in, it uses that identity. If not, it
+redirects straight to `https://topclosers.wtf/?return=<this page>` — the
+one central login for every app in this family.
 
-Two small database additions were made to support this (both non-destructive,
-neither touches any existing ProSim/RepLine data):
-- `breakroom_kv_store` — TheBreakRoom's own chat/board/DM/presence data.
-- `breakroom_list_people()` — a read-only function exposing just id + name
-  (never phone or PIN) for the Mailroom directory.
+This replaced two earlier approaches, in order:
+1. TheBreakRoom's own phone+PIN form calling `branch_login` directly.
+2. A handoff-token bridge (`?handoff=TOKEN` in the URL) for landing here
+   already logged in from another app, before real shared cookies worked
+   across subdomains.
+
+Both are gone now that `breakroom.topclosers.wtf` shares a real parent
+domain with the auth service and the rest of the app family, so a real
+browser session cookie does the whole job.
+
+One assumption worth flagging: the sign-out button calls
+`POST https://auth.topclosers.wtf/api/logout`. That exact path wasn't
+handed to me explicitly — if the real logout endpoint differs, sign-out
+will silently fail to clear the shared session even though the button
+still redirects. Worth a quick manual check.
+
+## Shared login across your apps (background)
+
+TheBreakRoom's Mailroom directory (`breakroom_list_people`) and presence
+still use the same shared `students` table as everything else — that part
+is unchanged. Only the *login flow itself* moved to the central service.
 
 ## Uploading to GitHub
 

@@ -69,31 +69,14 @@ window.storage = {
   },
 };
 
-// Shared login/identity — talks to the SAME `students` table and `branch_login`
-// function that ProSim/RepLine already use, so one phone + PIN works everywhere
-// instead of TheBreakRoom keeping its own separate account list.
+// Login/session is now handled entirely by the central auth service at
+// topclosers.wtf (see App.jsx's session check + redirect on load) — this
+// app no longer authenticates anyone itself. listPeople() stays: it's just
+// the Mailroom's "who can I message" directory, unrelated to login.
 window.breakroomAuth = {
-  async login(phone, pin, name) {
-    const { data, error } = await supabase.rpc("branch_login", {
-      p_phone: phone,
-      p_pin: pin,
-      p_name: name || null,
-    });
-    if (error) throw error;
-    return data; // { status: 'ok'|'needs_name'|'wrong_pin'|'error', student?, message? }
-  },
   async listPeople() {
     const { data, error } = await supabase.rpc("breakroom_list_people");
     if (error) throw error;
     return data || []; // [{ id, name }]
-  },
-  // Consumes a single-use handoff token minted by LogBook (or any app that
-  // holds the service-role key) — lets someone arrive here already logged in
-  // via a link like .../?handoff=TOKEN, with no shared secret ever exposed
-  // to this client-side code. Tokens are single-use and expire in ~60s.
-  async consumeHandoff(token) {
-    const { data, error } = await supabase.rpc("branch_consume_handoff", { p_token: token });
-    if (error) throw error;
-    return data; // { status: 'ok', student } or { status: 'invalid' }
   },
 };
