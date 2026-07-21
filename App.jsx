@@ -361,13 +361,25 @@ export default function TheBreakRoom() {
       } catch (e) {
         s = { status: "error" };
       }
+
       if (s.status === "ok" && s.student) {
-        setProfile({ id: s.student.id, name: s.student.name, phone: s.student.phone, joined: Date.now() });
-        setProfileLoaded(true);
-      } else {
-        setRedirecting(true);
-        window.location.href = "https://topclosers.wtf/?return=" + encodeURIComponent(window.location.href);
+        // Session check succeeded. Anything that goes wrong from here on
+        // (rendering, later data loads, etc.) must never bounce back to the
+        // central login — that's only for a genuinely failed session check.
+        try {
+          setProfile({ id: s.student.id, name: s.student.name, phone: s.student.phone, joined: Date.now() });
+          setProfileLoaded(true);
+        } catch (e) {
+          console.error("Error after a successful session check (not redirecting):", e);
+          setProfileLoaded(true);
+        }
+        return;
       }
+
+      // Only reached when the session check itself failed or came back
+      // not-ok — this is the one and only redirect-to-login path.
+      setRedirecting(true);
+      window.location.href = "https://topclosers.wtf";
     })();
   }, []);
 
