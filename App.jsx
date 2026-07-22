@@ -348,6 +348,45 @@ export default function TheBreakRoom() {
   const [channel, setChannel] = useState("big-table");
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // Every screen change here used to be invisible to the browser — pure React
+  // state, no history entry. That meant pressing Back had nothing of ours to
+  // land on, so it fell straight through to whatever loaded before this page
+  // (topclosers.wtf, via the SSO redirect). navigate() pushes a real history
+  // entry per screen; the popstate listener below syncs state back when the
+  // person actually uses Back/Forward, so those now move between THIS app's
+  // own screens first, same as any normal multi-page site.
+  const navigate = useCallback((nextView, nextChannel) => {
+    setView(nextView);
+    if (nextChannel) setChannel(nextChannel);
+    const params = new URLSearchParams();
+    params.set("view", nextView);
+    if (nextChannel) params.set("channel", nextChannel);
+    history.pushState({ view: nextView, channel: nextChannel || null }, "", `?${params}`);
+  }, []);
+
+  useEffect(() => {
+    // Baseline entry so the very first Back press has somewhere of ours to
+    // go before it can ever reach outside the app.
+    const params = new URLSearchParams(window.location.search);
+    const initialView = params.get("view") || "lobby";
+    const initialChannel = params.get("channel") || "big-table";
+    setView(initialView);
+    setChannel(initialChannel);
+    history.replaceState({ view: initialView, channel: initialChannel }, "", `?view=${initialView}${initialChannel ? `&channel=${initialChannel}` : ""}`);
+
+    const onPopState = (e) => {
+      const s = e.state;
+      if (s) {
+        setView(s.view || "lobby");
+        if (s.channel) setChannel(s.channel);
+      } else {
+        setView("lobby");
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
   useEffect(() => {
     (async () => {
       // Real shared login now lives at topclosers.wtf. This checks the
@@ -539,7 +578,7 @@ export default function TheBreakRoom() {
         <nav className={`caf-nav ${menuOpen ? "open" : ""}`}>
           <button
             className={`caf-nav-item ${view === "lobby" ? "active" : ""}`}
-            onClick={() => { setView("lobby"); setMenuOpen(false); }}
+            onClick={() => { navigate("lobby"); setMenuOpen(false); }}
           >
             <span className="caf-nav-emoji">🏛️</span> The Lobby
           </button>
@@ -549,34 +588,34 @@ export default function TheBreakRoom() {
             <button
               key={c.id}
               className={`caf-nav-item ${view === "cafeteria" && channel === c.id ? "active" : ""}`}
-              onClick={() => { setView("cafeteria"); setChannel(c.id); setMenuOpen(false); }}
+              onClick={() => { navigate("cafeteria", c.id); setMenuOpen(false); }}
             >
               <span className="caf-nav-emoji">{c.emoji}</span> {c.name}
             </button>
           ))}
           <button
             className={`caf-nav-item ${view === "board" ? "active" : ""}`}
-            onClick={() => { setView("board"); setMenuOpen(false); }}
+            onClick={() => { navigate("board"); setMenuOpen(false); }}
           >
             <span className="caf-nav-emoji">📌</span> Bulletin Board
           </button>
           <button
             className={`caf-nav-item ${view === "mail" ? "active" : ""}`}
-            onClick={() => { setView("mail"); setMenuOpen(false); }}
+            onClick={() => { navigate("mail"); setMenuOpen(false); }}
           >
             <span className="caf-nav-emoji">📬</span> The Mailroom
             {dmUnread > 0 && <span className="caf-badge">{dmUnread}</span>}
           </button>
 
           <div className="caf-nav-section">Down the Hall</div>
-          <button className={`caf-nav-item branch ${view === "hall" ? "active" : ""}`} onClick={() => { setView("hall"); setMenuOpen(false); }}>
+          <button className={`caf-nav-item branch ${view === "hall" ? "active" : ""}`} onClick={() => { navigate("hall"); setMenuOpen(false); }}>
             <span className="caf-nav-emoji">🚪</span> Other Buildings
           </button>
           <div className="caf-nav-foot">Chats, board posts, and the who's-here list are shared with everyone using this app. Your PIN stays private.</div>
         </nav>
 
         <main className="caf-main">
-          {view === "lobby" && <Lobby profile={profile} goTo={(v) => setView(v)} dmUnread={dmUnread} />}
+          {view === "lobby" && <Lobby profile={profile} goTo={(v) => navigate(v)} dmUnread={dmUnread} />}
           {view === "cafeteria" && (() => {
             const c = CHANNELS.find((c) => c.id === channel);
             return c.type === "chat"
@@ -765,7 +804,7 @@ function Lobby({ profile, goTo, dmUnread }) {
         <button className="caf-lobby-card" onClick={() => goTo("board")}>
           <div className="caf-lobby-card-emoji">📌</div>
           <div className="caf-lobby-card-title">Check the board</div>
-          <div className="caf-lobby-card-text">Manager-only announcements and threads. Set or enter the manager password to get in.</div>
+          <div className="caf-lobby-card-text">Announcements from managers. Everyone can read and reply — posting a new one needs the manager password.</div>
         </button>
         <button className="caf-lobby-card" onClick={() => goTo("mail")}>
           <div className="caf-lobby-card-emoji">📬</div>
@@ -1195,7 +1234,7 @@ function sortPosts(posts, mode) {
 }
 
 /* ---------- Forum: post + comment, reusable for any room ---------- */
-function Forum({ profile, storageKey, headerEmoji, headerTitle, headerSub, green, wellnessNote, postVerb = "Post" }) {
+function Forum({ profile, storageKey, headerEmoji, headerTitle, headerSub, green, wellnessNote, postVerb = "Post", canCompose = true, lockedNotice = null }) {
   const [posts, setPosts] = useState(null);
   const [open, setOpen] = useState(null);
   const [composing, setComposing] = useState(false);
@@ -1324,18 +1363,22 @@ function Forum({ profile, storageKey, headerEmoji, headerTitle, headerSub, green
 
       {!openPost && (
         <>
-          {!composing ? (
-            <button className="caf-pin-new" onClick={() => setComposing(true)}>+ {postVerb} something</button>
-          ) : (
-            <div className="caf-pin-form">
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" maxLength={90} />
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="What do you want to say? Paste a YouTube or video link to embed it." rows={4} maxLength={2000} />
-              <div className="caf-row">
-                <AttachControl attach={attach} setAttach={setAttach} err={attachErr} setErr={setAttachErr} />
-                <button className="ghost" onClick={() => { setComposing(false); setAttach(null); setAttachErr(""); }}>Cancel</button>
-                <button onClick={submitPost} disabled={!title.trim() || !body.trim() || busy}>{postVerb} it</button>
+          {canCompose ? (
+            !composing ? (
+              <button className="caf-pin-new" onClick={() => setComposing(true)}>+ {postVerb} something</button>
+            ) : (
+              <div className="caf-pin-form">
+                <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" maxLength={90} />
+                <textarea value={body} onChange={(e) => setBody(e.target.value)} placeholder="What do you want to say? Paste a YouTube or video link to embed it." rows={4} maxLength={2000} />
+                <div className="caf-row">
+                  <AttachControl attach={attach} setAttach={setAttach} err={attachErr} setErr={setAttachErr} />
+                  <button className="ghost" onClick={() => { setComposing(false); setAttach(null); setAttachErr(""); }}>Cancel</button>
+                  <button onClick={submitPost} disabled={!title.trim() || !body.trim() || busy}>{postVerb} it</button>
+                </div>
               </div>
-            </div>
+            )
+          ) : (
+            lockedNotice
           )}
 
           {posts !== null && posts.length > 0 && (
@@ -1423,10 +1466,11 @@ function Forum({ profile, storageKey, headerEmoji, headerTitle, headerSub, green
   );
 }
 
-/* ---------- Bulletin Board: same Forum, gated behind a manager password ---------- */
+/* ---------- Bulletin Board: everyone can see posts, only managers can create them ---------- */
 function BulletinBoard({ profile }) {
   const [unlocked, setUnlocked] = useState(false);
   const [hasPassword, setHasPassword] = useState(null); // null = checking
+  const [showLogin, setShowLogin] = useState(false);
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1446,6 +1490,8 @@ function BulletinBoard({ profile }) {
     const stored = await loadShared(PW_KEY, null);
     if (stored === hashPin("board", pw)) {
       setUnlocked(true);
+      setShowLogin(false);
+      setPw("");
     } else {
       setErr("That's not the manager password.");
     }
@@ -1465,49 +1511,51 @@ function BulletinBoard({ profile }) {
     }
     const ok = await saveShared(PW_KEY, hashPin("board", pw));
     setBusy(false);
-    if (ok) setUnlocked(true);
+    if (ok) { setUnlocked(true); setShowLogin(false); setPw(""); }
     else setErr("Couldn't save the password. Try again.");
   };
 
-  if (unlocked) {
-    return (
-      <Forum
-        profile={profile}
-        storageKey="caf-board-posts"
-        headerEmoji="📌"
-        headerTitle="Bulletin Board"
-        headerSub="Manager announcements and threads that deserve more than a chat message."
-        postVerb="Pin"
-      />
-    );
-  }
+  const lockedNotice = showLogin ? (
+    <div className="caf-gate-inline" style={{ marginBottom: 14 }}>
+      {hasPassword === null && <div className="caf-dim">Checking…</div>}
+      {hasPassword === false && (
+        <>
+          <p>No manager password has been set yet. If you're a manager, set one now — you'll need it (and so will every other manager) to post here from now on.</p>
+          <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && setInitialPassword()} type="password" placeholder="Choose a manager password" maxLength={60} autoFocus />
+          {err && <div className="caf-err">{err}</div>}
+          <div className="caf-row">
+            <button className="ghost" onClick={() => { setShowLogin(false); setErr(""); }}>Cancel</button>
+            <button disabled={!pw || busy} onClick={setInitialPassword}>{busy ? "Setting…" : "Set password & unlock posting"}</button>
+          </div>
+        </>
+      )}
+      {hasPassword === true && (
+        <>
+          <p>Enter the manager password to post here.</p>
+          <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitExisting()} type="password" placeholder="Manager password" maxLength={60} autoFocus />
+          {err && <div className="caf-err">{err}</div>}
+          <div className="caf-row">
+            <button className="ghost" onClick={() => { setShowLogin(false); setErr(""); }}>Cancel</button>
+            <button disabled={!pw || busy} onClick={submitExisting}>{busy ? "Checking…" : "Unlock posting"}</button>
+          </div>
+        </>
+      )}
+    </div>
+  ) : (
+    <button className="caf-pin-new" onClick={() => setShowLogin(true)}>🔒 Manager sign-in to post</button>
+  );
 
   return (
-    <div className="caf-board">
-      <div className="caf-menuboard cork">
-        <div className="caf-menuboard-title">📌 Bulletin Board</div>
-        <div className="caf-menuboard-sub">This board is manager-only.</div>
-      </div>
-      <div className="caf-gate-inline">
-        {hasPassword === null && <div className="caf-dim">Checking…</div>}
-        {hasPassword === false && (
-          <>
-            <p>No manager password has been set yet. If you're a manager, set one now — you'll need it (and so will every other manager) to get in from now on.</p>
-            <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && setInitialPassword()} type="password" placeholder="Choose a manager password" maxLength={60} />
-            {err && <div className="caf-err">{err}</div>}
-            <button disabled={!pw || busy} onClick={setInitialPassword}>{busy ? "Setting…" : "Set password & enter"}</button>
-          </>
-        )}
-        {hasPassword === true && (
-          <>
-            <p>Enter the manager password to view the board.</p>
-            <input value={pw} onChange={(e) => setPw(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitExisting()} type="password" placeholder="Manager password" maxLength={60} />
-            {err && <div className="caf-err">{err}</div>}
-            <button disabled={!pw || busy} onClick={submitExisting}>{busy ? "Checking…" : "Enter"}</button>
-          </>
-        )}
-      </div>
-    </div>
+    <Forum
+      profile={profile}
+      storageKey="caf-board-posts"
+      headerEmoji="📌"
+      headerTitle="Bulletin Board"
+      headerSub="Announcements from managers — everyone can read and reply, only managers can post."
+      postVerb="Pin"
+      canCompose={unlocked}
+      lockedNotice={lockedNotice}
+    />
   );
 }
 
