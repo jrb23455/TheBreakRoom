@@ -607,10 +607,6 @@ export default function TheBreakRoom() {
             {dmUnread > 0 && <span className="caf-badge">{dmUnread}</span>}
           </button>
 
-          <div className="caf-nav-section">Down the Hall</div>
-          <button className={`caf-nav-item branch ${view === "hall" ? "active" : ""}`} onClick={() => { navigate("hall"); setMenuOpen(false); }}>
-            <span className="caf-nav-emoji">🚪</span> Other Buildings
-          </button>
           <div className="caf-nav-foot">Chats, board posts, and the who's-here list are shared with everyone using this app. Your PIN stays private.</div>
         </nav>
 
@@ -633,7 +629,6 @@ export default function TheBreakRoom() {
           })()}
           {view === "board" && <BulletinBoard profile={profile} />}
           {view === "mail" && <Mailroom profile={profile} index={dmMeta.index} readMap={dmMeta.read} markRead={markDmRead} />}
-          {view === "hall" && <Hallway />}
         </main>
       </div>
     </div>
@@ -759,7 +754,7 @@ function Lobby({ profile, goTo, dmUnread }) {
       <div className="caf-lobby-hero">
         <div className="caf-lobby-eyebrow">The Lobby</div>
         <h1 className="caf-lobby-title">{greeting}, {profile.name.split(" ")[0]}.</h1>
-        <p className="caf-lobby-sub">This is home base — the chat rooms and bulletin board are through the Main Hall, private notes go through the Mailroom, and the branch apps are listed under Other Buildings. Same phone + PIN gets you into every one of them.</p>
+        <p className="caf-lobby-sub">This is home base — the chat rooms and bulletin board are through the Main Hall, and private notes go through the Mailroom.</p>
       </div>
 
       <MorningBrief profile={profile} dmUnread={dmUnread} />
@@ -810,11 +805,6 @@ function Lobby({ profile, goTo, dmUnread }) {
           <div className="caf-lobby-card-emoji">📬</div>
           <div className="caf-lobby-card-title">Slide a note</div>
           <div className="caf-lobby-card-text">One-on-one messages in the Mailroom — for anything that doesn't belong at the big table. Unread notes show a badge in the sidebar.</div>
-        </button>
-        <button className="caf-lobby-card" onClick={() => goTo("hall")}>
-          <div className="caf-lobby-card-emoji">🚪</div>
-          <div className="caf-lobby-card-title">Head to another building</div>
-          <div className="caf-lobby-card-text">Study tools and role-specific apps live in their own buildings. Find the doors here — your same login works in all of them.</div>
         </button>
       </div>
 
@@ -1559,37 +1549,6 @@ function BulletinBoard({ profile }) {
   );
 }
 
-/* ---------- Hallway: doors to the separate branch apps ---------- */
-function Hallway() {
-  const DOORS = [
-    { id: "prosim", name: "ProSim — Insurance Sales Trainer", url: "https://pro-sim-sepia.vercel.app/" },
-    { id: "repline", name: "RepLine", url: "https://repline-theta.vercel.app/" },
-    { id: "mosaic", name: "Mosaic — Goal Alignment Platform", url: "https://vision-board-vert.vercel.app/" },
-    { id: "logbook", name: "LogBook", url: "https://logbook-prosim.vercel.app/" },
-  ];
-
-  return (
-    <div className="caf-hall">
-      <div className="caf-menuboard">
-        <div className="caf-menuboard-title">🚪 Other Buildings</div>
-        <div className="caf-menuboard-sub">TheBreakRoom is just the hangout — the Claims Wing and other tools live in their own apps. Same phone + PIN gets you in everywhere.</div>
-      </div>
-
-      <div className="caf-doors">
-        {DOORS.map((d) => (
-          <div key={d.id} className="caf-door">
-            <a href={d.url} target="_blank" rel="noreferrer" className="caf-door-link">
-              <span className="caf-door-emoji">🚪</span>
-              <span className="caf-door-name">{d.name}</span>
-              <span className="caf-door-go">Enter →</span>
-            </a>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /* ---------- Styles ---------- */
 function Style() {
   return (
@@ -1893,17 +1852,6 @@ function Style() {
       .caf-member { background: none; border: 1px solid transparent; border-radius: 9px; padding: 10px 11px; text-align: left; font-size: .92rem; color: var(--body); font-family: var(--serif); }
       .caf-member:hover { background: var(--card2); border-color: var(--line-soft); color: var(--text); }
 
-      /* Hallway */
-      .caf-hall { max-width: 720px; width: 100%; }
-      .caf-doors { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-      .caf-door { display: flex; align-items: center; gap: 8px; }
-      .caf-door-link { flex: 1; display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: 12px; padding: 15px 17px; text-decoration: none; color: var(--text); transition: border-color .15s ease, transform .15s ease; font-family: var(--serif); }
-      .caf-door-link:hover { border-color: #3a4a78; border-left-color: var(--blue); transform: translateX(2px); }
-      .caf-door-emoji { font-size: 1.25rem; }
-      .caf-door-name { font-weight: 700; font-size: 1rem; }
-      .caf-door-go { margin-left: auto; font-family: var(--mono); font-size: .68rem; font-weight: 700; color: var(--blue); letter-spacing: .06em; }
-      .caf-door-x { background: none; border: 1px solid var(--line); border-radius: 8px; color: var(--dim); width: 32px; height: 32px; flex-shrink: 0; }
-      .caf-door-x:hover { color: var(--pink); border-color: var(--pink); }
 
       /* Attach control */
       .caf-clip, .caf-composer button.caf-clip, .caf-row button.caf-clip { background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; font-size: 1rem; flex-shrink: 0; font-weight: 400; color: var(--body); }
