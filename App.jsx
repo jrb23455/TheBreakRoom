@@ -15,6 +15,7 @@ const CHANNELS = [
   { id: "ask-a-veteran", name: "Ask a Veteran", blurb: "Post a question for the folks who've been around.", emoji: "🧭", type: "forum" },
   { id: "off-topic", name: "Off Topic", blurb: "Weekend plans, sports, pets, whatever.", emoji: "☕", type: "forum" },
   { id: "wellness-commons", name: "The Commons", blurb: "Body, mind, and spirit — check-ins, wins, and whatever helps you feel human today.", emoji: "🌿", type: "forum" },
+  { id: "jukebox", name: "The Jukebox", blurb: "Drop a YouTube link and tell everyone why it's worth a listen.", emoji: "🎵", type: "forum" },
 ];
 
 // Shown for The Commons only — a quiet reminder that this room is peer support, not professional care.
@@ -139,6 +140,52 @@ function MediaImage({ id }) {
 
 const URL_RE = /(https?:\/\/[^\s]+)/g;
 
+/* ---------- YouTube link → thumbnail card, expands to a real player on click ---------- */
+function YouTubeCard({ videoId }) {
+  const [playing, setPlaying] = useState(false);
+  const [title, setTitle] = useState(null);
+  const [thumbFailed, setThumbFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${videoId}`)}&format=json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (alive && data?.title) setTitle(data.title); })
+      .catch(() => {}); // no title is fine — the thumbnail card still works without it
+    return () => { alive = false; };
+  }, [videoId]);
+
+  if (playing) {
+    return (
+      <iframe
+        className="caf-media-video"
+        src={`https://www.youtube.com/embed/${videoId}?autoplay=1`}
+        title={title || "Video"}
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allowFullScreen
+      />
+    );
+  }
+
+  return (
+    <button className="caf-yt-card" onClick={() => setPlaying(true)} title={title || "Play video"}>
+      {!thumbFailed ? (
+        <img
+          className="caf-yt-thumb"
+          src={`https://img.youtube.com/vi/${videoId}/hqdefault.jpg`}
+          alt={title || "YouTube video thumbnail"}
+          loading="lazy"
+          onError={() => setThumbFailed(true)}
+        />
+      ) : (
+        <div className="caf-yt-thumb caf-yt-thumb-fallback">🎵</div>
+      )}
+      <span className="caf-yt-play">▶</span>
+      {title && <span className="caf-yt-title">{title}</span>}
+    </button>
+  );
+}
+
 function embedForUrl(url, key) {
   const path = url.toLowerCase().split(/[?#]/)[0];
   if (/\.(png|jpe?g|gif|webp)$/.test(path)) {
@@ -149,16 +196,7 @@ function embedForUrl(url, key) {
   }
   const yt = url.match(/(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([\w-]{6,})/);
   if (yt) {
-    return (
-      <iframe
-        key={key}
-        className="caf-media-video"
-        src={`https://www.youtube.com/embed/${yt[1]}`}
-        title="Video"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-        allowFullScreen
-      />
-    );
+    return <YouTubeCard key={key} videoId={yt[1]} />;
   }
   return <a key={key} href={url} target="_blank" rel="noreferrer" className="caf-link">{url}</a>;
 }
@@ -1755,6 +1793,13 @@ function Style() {
       /* Media */
       .caf-media-img { display: block; max-width: min(340px, 100%); max-height: 300px; border-radius: 10px; margin-top: 8px; border: 1px solid var(--line); }
       .caf-media-video { display: block; width: min(420px, 100%); aspect-ratio: 16 / 9; border-radius: 10px; margin-top: 8px; border: 1px solid var(--line); background: #000; }
+
+      .caf-yt-card { display: block; position: relative; width: min(360px, 100%); border-radius: 10px; margin-top: 8px; overflow: hidden; border: 1px solid var(--line); background: #000; text-align: left; padding: 0; }
+      .caf-yt-thumb { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+      .caf-yt-thumb-fallback { display: flex; align-items: center; justify-content: center; font-size: 2rem; background: var(--card2); color: var(--dim); }
+      .caf-yt-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 52px; height: 52px; border-radius: 50%; background: rgba(0,0,0,.65); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; border: 2px solid rgba(255,255,255,.85); transition: background .15s ease, transform .15s ease; }
+      .caf-yt-card:hover .caf-yt-play { background: var(--pink); transform: translate(-50%, -50%) scale(1.08); }
+      .caf-yt-title { display: block; padding: 8px 12px; font-family: var(--serif); font-size: .82rem; color: var(--text); background: linear-gradient(0deg, rgba(0,0,0,.75), rgba(0,0,0,.35)); position: absolute; bottom: 0; left: 0; right: 0; line-height: 1.35; }
       .caf-media-load, .caf-media-miss { font-family: var(--mono); font-size: .68rem; color: var(--dim); background: var(--card2); border: 1px dashed var(--line); border-radius: 8px; padding: 10px 14px; margin-top: 8px; display: inline-block; letter-spacing: .05em; }
       .caf-link { color: var(--blue); word-break: break-all; }
 
